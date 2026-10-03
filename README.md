@@ -126,10 +126,65 @@ This configures:
 - 512 MiB RAM
 - Linux kernel
 - root filesystem
+- a TAP interface with host IP `10.200.1.1/24`, connected to the guest
 
 and starts the microVM.
 
 The guest boot output will appear in the terminal where the Firecracker process is running.
+
+## 7. Networking
+
+The start script deletes and recreates the selected TAP, assigns it
+`10.200.1.1/24`, and brings it up. It gives ownership to the invoking user so
+Firecracker can open the TAP without running as root. The TAP name is the
+second argument; it defaults to `tap0`:
+
+```bash
+# Default TAP
+./start-firecracker.sh /tmp/firecracker.socket
+
+# Or choose a different TAP
+./start-firecracker.sh /tmp/firecracker.socket tap1
+```
+
+Use a fresh Firecracker process, and stop any guest using the selected TAP
+before running the script. Changing the TAP name does not change the fixed IP
+addresses; these examples configure one microVM.
+
+After each guest boot, run these commands as root in the guest console:
+
+```bash
+ip link set eth0 up
+ip addr add 10.200.1.2/24 dev eth0
+
+# Ping the host from the guest
+ping -c 3 10.200.1.1
+```
+
+From a separate host SSH shell, ping the guest:
+
+```bash
+ping -c 3 -I tap0 10.200.1.2
+```
+
+Replace `tap0` with your chosen TAP name in the host ping command. This provides
+host-to-guest connectivity; Internet access requires additional routing and NAT.
+The IP settings in the guest must be applied again after reboot.
+
+## 8. Stop the microVM
+
+Run in the host shell:
+
+```bash
+export FC_SOCKET="/tmp/firecracker.socket"
+./delete-firecracker.sh
+```
+
+`FC_SOCKET` defaults to `/tmp/firecracker.socket` when unset. The script sends
+`SendCtrlAltDel` and removes the socket immediately after a successful API call.
+If the API rejects the request, the socket is kept. The guest must be running
+rather than paused to handle Ctrl-Alt-Del.
+
 
 ## Delete the Google Cloud VM
 

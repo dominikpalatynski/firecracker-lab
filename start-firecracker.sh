@@ -1,21 +1,28 @@
-```bash
 #!/usr/bin/env bash
 
-set -e
+set -euo pipefail
 
-SOCKET="$1"
+SOCKET="${1:?Usage: $0 /path/to/firecracker.socket [tap_name]}"
+TAP_DEV="${2:-tap0}"
 
-KERNEL="$(pwd)/$(ls vmlinux-* | tail -1)"
+if [[ ! "$TAP_DEV" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,14}$ ]]; then
+  echo "Invalid TAP name: use 1-15 letters, digits, dots, underscores or hyphens; start with a letter or digit." >&2
+  exit 1
+fi
+
+KERNEL="$(pwd)/$(ls vmlinux-* | sort -V | tail -1)"
 ROOTFS="$(pwd)/$(ls ubuntu-*.ext4 | tail -1)"
 
 echo "Socket: $SOCKET"
 echo "Kernel: $KERNEL"
 echo "Rootfs: $ROOTFS"
+echo "TAP: $TAP_DEV"
 
 echo
 echo "==> Configuring machine"
 
-curl --unix-socket "$SOCKET" \
+# Reject an already-running microVM before deleting its TAP.
+curl --fail-with-body --silent --show-error --unix-socket "$SOCKET" \
   -X PUT \
   http://localhost/machine-config \
   -H 'Content-Type: application/json' \
@@ -25,9 +32,17 @@ curl --unix-socket "$SOCKET" \
   }'
 
 echo
+echo "==> Preparing host networking"
+
+sudo ip link del "$TAP_DEV" 2>/dev/null || true
+sudo ip tuntap add dev "$TAP_DEV" mode tap user "$(id -un)"
+sudo ip addr add 10.200.1.1/24 dev "$TAP_DEV"
+sudo ip link set "$TAP_DEV" up
+
+echo
 echo "==> Configuring kernel"
 
-curl --unix-socket "$SOCKET" \
+curl --fail-with-body --silent --show-error --unix-socket "$SOCKET" \
   -X PUT \
   http://localhost/boot-source \
   -H 'Content-Type: application/json' \
@@ -39,7 +54,7 @@ curl --unix-socket "$SOCKET" \
 echo
 echo "==> Configuring rootfs"
 
-curl --unix-socket "$SOCKET" \
+curl --fail-with-body --silent --show-error --unix-socket "$SOCKET" \
   -X PUT \
   http://localhost/drives/rootfs \
   -H 'Content-Type: application/json' \
@@ -51,9 +66,21 @@ curl --unix-socket "$SOCKET" \
   }"
 
 echo
+echo "==> Setup Networking"
+
+curl --fail-with-body --silent --show-error --unix-socket "$SOCKET" \
+  -X PUT 'http://localhost/network-interfaces/eth0' \
+  -H 'Content-Type: application/json' \
+  -d "{
+    \"iface_id\": \"eth0\",
+    \"guest_mac\": \"06:00:AC:10:00:02\",
+    \"host_dev_name\": \"$TAP_DEV\"
+  }"
+
+echo
 echo "==> Starting microVM"
 
-curl --unix-socket "$SOCKET" \
+curl --fail-with-body --silent --show-error --unix-socket "$SOCKET" \
   -X PUT \
   http://localhost/actions \
   -H 'Content-Type: application/json' \
@@ -63,4 +90,3 @@ curl --unix-socket "$SOCKET" \
 
 echo
 echo "microVM started"
-```

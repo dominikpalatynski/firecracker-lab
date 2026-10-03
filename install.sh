@@ -1,10 +1,9 @@
-```bash
 #!/usr/bin/env bash
 
-set -e
+set -euo pipefail
 
 sudo apt update
-sudo apt install -y curl wget squashfs-tools e2fsprogs
+sudo apt install -y curl wget squashfs-tools e2fsprogs tmux
 
 ARCH="$(uname -m)"
 
@@ -13,7 +12,7 @@ echo "==> Downloading Firecracker"
 RELEASE_URL="https://github.com/firecracker-microvm/firecracker/releases"
 LATEST="$(basename "$(curl -fsSLI -o /dev/null -w '%{url_effective}' "$RELEASE_URL/latest")")"
 
-curl -L "$RELEASE_URL/download/$LATEST/firecracker-$LATEST-$ARCH.tgz" \
+curl -fsSL "$RELEASE_URL/download/$LATEST/firecracker-$LATEST-$ARCH.tgz" \
   | tar -xz
 
 mv "release-$LATEST-$ARCH/firecracker-$LATEST-$ARCH" firecracker
@@ -59,9 +58,9 @@ wget \
 
 echo "==> Creating ext4 rootfs"
 
-rm -rf squashfs-root
+sudo rm -rf squashfs-root
 
-unsquashfs "ubuntu-$UBUNTU_VERSION.squashfs"
+sudo unsquashfs "ubuntu-$UBUNTU_VERSION.squashfs"
 
 sudo chown -R root:root squashfs-root
 
@@ -76,4 +75,3 @@ echo "Installed:"
 echo "Firecracker: $(pwd)/firecracker"
 echo "Kernel:      $(pwd)/$(ls vmlinux-* | tail -1)"
 echo "Rootfs:      $(pwd)/$(ls ubuntu-*.ext4 | tail -1)"
-```
