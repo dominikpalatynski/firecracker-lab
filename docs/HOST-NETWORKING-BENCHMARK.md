@@ -22,7 +22,7 @@ In the original version of the lab, `start-firecracker.sh` performed these opera
 
 That original version provided host–guest connectivity; routing and NAT for Internet access required additional work. Changing the TAP name did not change the fixed addresses, so the script itself did not allocate independent addresses to multiple VMs.
 
-Currently, [init-firecracker](../init-firecracker) prepares the VM without networking, and [start-firecracker.sh](../start-firecracker.sh) only starts it. The current [README](../README.md#7-konfiguracja-sieci) points to the [CNI example](./cni-setup-example/README.md), which demonstrates host and guest configuration separately. The rest of this comparison concerns the architectural approaches described below.
+Currently, [init-firecracker](../init-firecracker) prepares the VM without networking, and [start-firecracker.sh](../start-firecracker.sh) only starts it. The current [README](../README.md#7-network-configuration) points to the [CNI example](./cni-setup-example/README.md), which demonstrates host and guest configuration separately. The rest of this comparison concerns the architectural approaches described below.
 
 Moving these commands into a background process automates their execution. A meaningful comparison also needs to establish who owns the created resources, how partial failures are detected, and when resources can be removed or reused.
 
