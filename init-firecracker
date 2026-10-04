@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SOCKET="${1:?Usage: $0 /path/to/firecracker.socket}"
+
+KERNEL="$(pwd)/$(ls vmlinux-* | sort -V | tail -1)"
+ROOTFS="$(pwd)/$(ls ubuntu-*.ext4 | tail -1)"
+
+echo "Socket: $SOCKET"
+echo "Kernel: $KERNEL"
+echo "Rootfs: $ROOTFS"
+
+echo
+echo "==> Configuring machine"
+
+curl --fail-with-body --silent --show-error --unix-socket "$SOCKET" \
+  -X PUT \
+  http://localhost/machine-config \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vcpu_count": 1,
+    "mem_size_mib": 512
+  }'
+
+echo
+echo "==> Configuring kernel"
+
+curl --fail-with-body --silent --show-error --unix-socket "$SOCKET" \
+  -X PUT \
+  http://localhost/boot-source \
+  -H 'Content-Type: application/json' \
+  -d "$(jq -n --arg kernel "$KERNEL" '{
+    kernel_image_path: $kernel,
+    boot_args: "console=ttyS0 reboot=k panic=1 pci=off"
+  }')"
+
+echo
+echo "==> Configuring rootfs"
+
+curl --fail-with-body --silent --show-error --unix-socket "$SOCKET" \
+  -X PUT \
+  http://localhost/drives/rootfs \
+  -H 'Content-Type: application/json' \
+  -d "$(jq -n --arg rootfs "$ROOTFS" '{
+    drive_id: "rootfs",
+    path_on_host: $rootfs,
+    is_root_device: true,
+    is_read_only: false
+  }')"
+
+echo
+echo "microVM initialized; configure networking before calling start-firecracker.sh"

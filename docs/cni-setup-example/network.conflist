@@ -1,0 +1,22 @@
+{
+  "cniVersion": "1.0.0",
+  "name": "firecracker-lab",
+  "plugins": [
+    {
+      "type": "ptp",
+      "mtu": 1400,
+      "ipMasq": true,
+      "ipMasqBackend": "iptables",
+      "ipam": {
+        "type": "host-local",
+        "subnet": "10.200.1.0/24",
+        "rangeStart": "10.200.1.2",
+        "gateway": "10.200.1.1",
+        "routes": [{"dst": "0.0.0.0/0"}]
+      },
+      "dns": {"nameservers": ["1.1.1.1"]}
+    },
+    {"type": "firewall", "backend": "iptables"},
+    {"type": "tc-redirect-tap"}
+  ]
+}

@@ -1,30 +1,31 @@
 # Firecracker Lab
 
-A minimal lab for experimenting with Firecracker microVMs on Google Cloud.
+Proste środowisko do eksperymentowania z microVM Firecrackera w Google Cloud.
 
-## 1. Authenticate with Google Cloud
+## 1. Zaloguj się do Google Cloud
 
 ```bash
 gcloud auth login
 ```
 
-Set your project:
+Wybierz projekt:
 
 ```bash
-export PROJECT_ID="your-project-id"
+export PROJECT_ID="identyfikator-twojego-projektu"
 
 gcloud config set project "$PROJECT_ID"
 ```
 
-Enable the Compute Engine API:
+Włącz API Compute Engine:
 
 ```bash
 gcloud services enable compute.googleapis.com
 ```
 
-## 2. Create the VM
+## 2. Utwórz maszynę wirtualną
 
-We use an N2 VM because Firecracker requires KVM and nested virtualization.
+Używamy maszyny typu N2 z włączoną wirtualizacją zagnieżdżoną. Dzięki temu
+Firecracker może korzystać z KVM i uruchamiać własne microVM wewnątrz tej maszyny.
 
 ```bash
 export VM_NAME="firecracker-lab"
@@ -39,59 +40,70 @@ gcloud compute instances create "$VM_NAME" \
   --enable-nested-virtualization
 ```
 
-## 3. Connect over SSH
+## 3. Połącz się przez SSH
 
 ```bash
 gcloud compute ssh "$VM_NAME" \
   --zone="$ZONE"
 ```
 
-Verify that KVM is available:
+Sprawdź, czy KVM jest dostępne:
 
 ```bash
 ls -l /dev/kvm
 ```
 
-You should see something similar to:
+Wynik powinien wyglądać podobnie do:
 
 ```text
 crw-rw---- 1 root kvm ... /dev/kvm
 ```
 
-If your user does not have access to KVM:
+Jeśli Twój użytkownik nie ma dostępu do KVM, dodaj go do grupy `kvm`:
 
 ```bash
 sudo usermod -aG kvm $USER
 ```
 
-Then disconnect and SSH into the machine again.
+Następnie rozłącz sesję SSH i połącz się ponownie.
 
-Verify access:
+Sprawdź uprawnienia:
 
 ```bash
 test -r /dev/kvm && test -w /dev/kvm && echo "KVM OK"
 ```
 
-## 4. Install Firecracker, kernel and rootfs
+## 4. Zainstaluj Firecrackera, jądro, system plików i pluginy CNI
 
-Clone this repository and run:
+Sklonuj to repozytorium, przejdź do jego katalogu i uruchom:
 
 ```bash
 chmod +x install.sh
 ./install.sh
 ```
 
-The script downloads:
+Skrypt pobiera i przygotowuje:
 
-- Firecracker
-- Linux guest kernel
-- Ubuntu root filesystem
+- Firecrackera,
+- jądro Linuksa dla systemu gościa,
+- główny system plików Ubuntu (`rootfs`),
+- referencyjne pluginy CNI: `ptp`, `host-local` i `firewall` (v1.9.1),
+- adapter `tc-redirect-tap`, budowany za pomocą Go z ustalonej wersji źródeł.
 
-## 5. Start the Firecracker API
+Binarki CNI trafiają do `/opt/cni/bin`. Skrypt instaluje też `jq`, `iproute2`
+i `iptables`, potrzebne do wykonania przykładu konfiguracji sieci.
 
-Firecracker exposes its HTTP API through a Unix socket.
+## 5. Uruchom API Firecrackera
 
-Start Firecracker:
+Jeśli chcesz uruchomić VM **z siecią**, zamiast kroków 5–7 wykonaj
+[przewodnik konfiguracji CNI](./docs/cni-setup-example/README.md).
+Pokazuje on przygotowanie sieci i uruchomienie Firecrackera w przestrzeni
+sieciowej (`namespace`), w której znajduje się jego TAP.
+Poniższe polecenia uruchamiają VM bez interfejsu sieciowego.
+
+Firecracker udostępnia API HTTP przez gniazdo Unix (socket).
+
+Uruchom proces Firecrackera:
 
 ```bash
 export FC_SOCKET="/tmp/firecracker.socket"
@@ -101,94 +113,74 @@ rm -f "$FC_SOCKET"
 ./firecracker --api-sock "$FC_SOCKET"
 ```
 
-Leave this terminal running.
+Zostaw ten terminal otwarty.
 
-Open another SSH session:
+Otwórz drugą sesję SSH:
 
 ```bash
 gcloud compute ssh "$VM_NAME" \
   --zone="$ZONE"
 ```
 
-## 6. Start a microVM
+## 6. Uruchom microVM
 
-Run:
+W katalogu repozytorium wykonaj:
 
 ```bash
-chmod +x start-firecracker.sh
+chmod +x init-firecracker start-firecracker.sh
 
+./init-firecracker /tmp/firecracker.socket
 ./start-firecracker.sh /tmp/firecracker.socket
 ```
 
-This configures:
+`init-firecracker` konfiguruje:
 
-- 1 vCPU
-- 512 MiB RAM
-- Linux kernel
-- root filesystem
-- a TAP interface with host IP `10.200.1.1/24`, connected to the guest
+- 1 vCPU,
+- 512 MiB RAM,
+- jądro Linuksa,
+- główny system plików.
 
-and starts the microVM.
+Ten skrypt przygotowuje VM, ale nie konfiguruje sieci ani nie uruchamia systemu
+gościa. `start-firecracker.sh` wysyła wyłącznie akcję `InstanceStart`.
+Interfejs sieciowy i parametry startowe gościa skonfiguruj między tymi dwoma
+poleceniami, jeśli uruchamiasz wariant z siecią.
 
-The guest boot output will appear in the terminal where the Firecracker process is running.
+Komunikaty uruchamianego systemu gościa pojawią się w terminalu, w którym działa
+proces Firecrackera.
 
-## 7. Networking
+## 7. Konfiguracja sieci
 
-The start script deletes and recreates the selected TAP, assigns it
-`10.200.1.1/24`, and brings it up. It gives ownership to the invoking user so
-Firecracker can open the TAP without running as root. The TAP name is the
-second argument; it defaults to `tap0`:
+W [przykładzie konfiguracji CNI](./docs/cni-setup-example/README.md) znajdziesz
+bezpośrednie wywołania pluginów, wejściowe i wynikowe JSON-y, żądania do API
+Firecrackera, ustawienie IP gościa, sprawdzenie łączności i sprzątanie zasobów.
+Przykład używa `ptp` + `host-local` + `firewall` + `tc-redirect-tap`, bez Kubernetes
+i SDK Go.
 
-```bash
-# Default TAP
-./start-firecracker.sh /tmp/firecracker.socket
+Porównanie własnego modułu sieciowego z CNI i plan pomiarów znajdziesz w
+[dokumencie o networkingu hosta](./docs/HOST-NETWORKING-BENCHMARK.md) (po angielsku).
 
-# Or choose a different TAP
-./start-firecracker.sh /tmp/firecracker.socket tap1
-```
+Wykonaj ten przykład od początku, z nowym procesem Firecrackera. Proces
+uruchomiony wcześniej w domyślnej przestrzeni sieciowej nie zobaczy TAP
+znajdującego się w przestrzeni `vm-001` z przykładu.
 
-Use a fresh Firecracker process, and stop any guest using the selected TAP
-before running the script. Changing the TAP name does not change the fixed IP
-addresses; these examples configure one microVM.
+## 8. Zatrzymaj microVM
 
-After each guest boot, run these commands as root in the guest console:
-
-```bash
-ip link set eth0 up
-ip addr add 10.200.1.2/24 dev eth0
-
-# Ping the host from the guest
-ping -c 3 10.200.1.1
-```
-
-From a separate host SSH shell, ping the guest:
-
-```bash
-ping -c 3 -I tap0 10.200.1.2
-```
-
-Replace `tap0` with your chosen TAP name in the host ping command. This provides
-host-to-guest connectivity; Internet access requires additional routing and NAT.
-The IP settings in the guest must be applied again after reboot.
-
-## 8. Stop the microVM
-
-Run in the host shell:
+Wykonaj na hoście:
 
 ```bash
 export FC_SOCKET="/tmp/firecracker.socket"
 ./delete-firecracker.sh
 ```
 
-`FC_SOCKET` defaults to `/tmp/firecracker.socket` when unset. The script sends
-`SendCtrlAltDel` and removes the socket immediately after a successful API call.
-If the API rejects the request, the socket is kept. The guest must be running
-rather than paused to handle Ctrl-Alt-Del.
+Jeśli nie ustawisz `FC_SOCKET`, skrypt użyje `/tmp/firecracker.socket`.
+Wysyła on `SendCtrlAltDel` i usuwa socket natychmiast po udanym wywołaniu API.
+Jeśli API odrzuci żądanie, socket pozostanie. Aby obsłużyć Ctrl-Alt-Del, system
+gościa musi działać — nie może być wstrzymany.
 
 
-## Delete the Google Cloud VM
+## Usuń maszynę w Google Cloud
 
-When you are finished with the lab:
+Po zakończeniu eksperymentów usuń maszynę:
 
 ```bash
 gcloud compute instances delete "$VM_NAME" \
