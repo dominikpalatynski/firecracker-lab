@@ -96,7 +96,7 @@ The CNI binaries are installed in `/opt/cni/bin`. The script also installs
 ## 5. Start the Firecracker API
 
 To run a VM **with networking**, follow the
-[CNI setup guide](./docs/cni-setup-example/README.md) (in Polish) instead of steps 5–7.
+[CNI setup guide](./docs/cni-setup-example/README.md) instead of steps 5–7.
 It shows how to prepare the network and launch Firecracker in the network
 namespace containing its TAP device.
 The commands below boot a VM without a network interface.
@@ -149,7 +149,7 @@ Guest boot messages will appear in the terminal running the Firecracker process.
 
 ## 7. Network configuration
 
-The [CNI setup example](./docs/cni-setup-example/README.md) (in Polish) includes
+The [CNI setup example](./docs/cni-setup-example/README.md) includes
 direct plugin invocations, JSON inputs and results, Firecracker API requests,
 guest IP configuration, connectivity checks, and resource cleanup.
 It uses `ptp` + `host-local` + `firewall` + `tc-redirect-tap`, without Kubernetes

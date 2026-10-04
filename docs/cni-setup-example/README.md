@@ -1,30 +1,31 @@
-# CNI → Firecracker: przykład bez SDK i Kubernetes
+# CNI → Firecracker: an example without an SDK or Kubernetes
 
-Wyobraź sobie, że chcesz uruchomić jedną microVM. Najpierw przygotowujesz jej
-„gniazdko sieciowe” na hoście, potem podpinasz je do Firecrackera, a na końcu
-ustawiasz adres wewnątrz VM. CNI pomaga w pierwszej części:
+Imagine you want to launch a single microVM. First, you prepare its network
+connection on the host, then attach it to Firecracker, and finally configure
+an address inside the VM. CNI helps with the first part:
 
-| Element | Co robi |
+| Component | What it does |
 |---|---|
-| `ptp` | Tworzy parę veth, trasy i NAT do wyjścia przez hosta. |
-| `host-local` | Wywoływany przez `ptp`; rezerwuje IP w lokalnej puli. |
-| `firewall` | Dodaje reguły przepuszczające ruch VM przez hosta. |
-| `tc-redirect-tap` | Tworzy TAP i przekierowuje pakiety między nim a veth. |
-| My | Tworzymy namespace, wywołujemy pluginy, konfigurujemy VM i sprzątamy. |
+| `ptp` | Creates a veth pair, routes, and NAT for outbound access through the host. |
+| `host-local` | Called by `ptp`; reserves an IP address from a local pool. |
+| `firewall` | Adds rules allowing VM traffic through the host. |
+| `tc-redirect-tap` | Creates a TAP device and redirects packets between it and veth. |
+| Us | Create the namespace, call the plugins, configure the VM, and clean up. |
 
-Plugin to lokalny program: **JSON na stdin, wynik JSON na stdout** oraz parametry
-w zmiennych `CNI_*`. Nie wysyłamy do niego HTTP. Po konfiguracji plugin kończy
-pracę; pakiety obsługuje kernel. Dopiero API Firecrackera wywołujemy przez HTTP.
+A plugin is a local program: **JSON on stdin, a JSON result on stdout**, and
+parameters in `CNI_*` environment variables. We do not send it HTTP requests.
+Once configuration is complete, the plugin exits; the kernel handles packets.
+HTTP is used later to call the Firecracker API.
 
-## 1. Przygotuj hosta
+## 1. Prepare the host
 
-Przykład jest dla jednej VM, IPv4 i Ubuntu 24.04 z KVM. Polecenia wykonuj
-z katalogu głównego repozytorium na **hoście Firecrackera**, nie w microVM.
-Najpierw uruchom `./install.sh`: instaluje też potrzebne pluginy w `/opt/cni/bin`.
-Go jest potrzebne tylko do zbudowania adaptera; ten przykład nie używa SDK Go.
+This example uses one VM, IPv4, and Ubuntu 24.04 with KVM. Run the commands
+from the repository root on the **Firecracker host**, not inside the microVM.
+First run `./install.sh`; it also installs the required plugins in `/opt/cni/bin`.
+Go is needed only to build the adapter; this example does not use the Go SDK.
 
-W terminalu A otwórz Bash jako root. Tak uruchamiamy ten ręczny przykład labowy
-(TAP będzie należał do roota):
+In terminal A, open Bash as root. This is how we run this manual lab example
+(the TAP device will be owned by root):
 
 ```bash
 sudo bash
@@ -35,7 +36,7 @@ export CNI_IFNAME=veth0
 export CNI_ARGS=
 export FC_SOCKET=/tmp/firecracker-vm-001.socket
 STATE_DIR="$(mktemp -d /tmp/firecracker-cni-vm-001.XXXXXX)"
-echo "Wyniki i konfiguracje: $STATE_DIR"
+echo "Results and configurations: $STATE_DIR"
 
 for plugin in ptp host-local firewall tc-redirect-tap; do
   CNI_COMMAND=VERSION "$CNI_PATH/$plugin"
@@ -47,18 +48,20 @@ ip netns add vm-001
 ip -n vm-001 link set lo up
 ```
 
-Używaj świeżego namespace i wolnej puli `10.200.1.0/24`. `STATE_DIR` przechowuje
-wejścia oraz wyniki aż do sprzątania zasobów; nie kasuj go wcześniej. Konfigurację czytamy
-bezpośrednio z pliku — nie trzeba jej rejestrować w `/etc/cni/net.d`.
+Use a fresh namespace and an unused `10.200.1.0/24` address pool. `STATE_DIR`
+stores inputs and results until resource cleanup; do not delete it earlier.
+We read the configuration directly from a file, so it does not need to be
+registered in `/etc/cni/net.d`.
 
-## 2. Wywołaj bezpośrednio `ADD` po kolei
+## 2. Call each plugin's `ADD` directly, in order
 
-Cała lista jest w [network.conflist](./network.conflist). Pojedyncza binarka
-otrzymuje tylko własny obiekt z listy, wspólne `name` i `cniVersion`, a od drugiego
-pluginu także `prevResult`. `jq` tylko składa te JSON-y.
+The complete list is in [network.conflist](./network.conflist). Each binary
+receives only its own object from the list, the shared `name` and `cniVersion`,
+and, starting with the second plugin, `prevResult`. `jq` only assembles these
+JSON objects.
 
-**`ptp` → `host-local`:** powstają veth, przydział IP, routing i masquerade.
-`ptp` sam włącza wymagane przekazywanie pakietów IPv4 na hoście.
+**`ptp` → `host-local`:** creates the veth pair, IP allocation, routing, and
+masquerading. `ptp` enables the required IPv4 forwarding on the host itself.
 
 ```bash
 export CNI_COMMAND=ADD
@@ -68,7 +71,7 @@ jq '.plugins[0] + {name, cniVersion}' \
   cp "$STATE_DIR/ptp-result.json" "$STATE_DIR/result.json"
 ```
 
-**`firewall`:** dostaje wynik `ptp` i dodaje reguły przekazywania pakietów.
+**`firewall`:** receives the `ptp` result and adds packet forwarding rules.
 
 ```bash
 jq --slurpfile prev "$STATE_DIR/result.json" \
@@ -78,7 +81,7 @@ jq --slurpfile prev "$STATE_DIR/result.json" \
   cp "$STATE_DIR/firewall-result.json" "$STATE_DIR/result.json"
 ```
 
-**`tc-redirect-tap`:** powstaje TAP i przekierowanie ruchu veth ↔ TAP.
+**`tc-redirect-tap`:** creates the TAP device and veth ↔ TAP traffic redirection.
 
 ```bash
 jq --slurpfile prev "$STATE_DIR/result.json" \
@@ -87,38 +90,39 @@ jq --slurpfile prev "$STATE_DIR/result.json" \
 "$CNI_PATH/tc-redirect-tap" < "$STATE_DIR/tap.json" > "$STATE_DIR/tap-result.json" &&
   cp "$STATE_DIR/tap-result.json" "$STATE_DIR/result.json"
 
-cat "$STATE_DIR/tap.json"     # dokładne dane wejściowe ostatniego ADD
-jq . "$STATE_DIR/result.json" # odpowiedź całego łańcucha
+cat "$STATE_DIR/tap.json"     # exact input to the last ADD
+jq . "$STATE_DIR/result.json" # result of the entire chain
 ```
 
-Po błędzie **zatrzymaj się i przejdź do sprzątania**, zamiast wywoływać kolejne
-`ADD`. `result.json` zachowuje ostatni poprawny wynik. To ręczny przykład:
-nie ma automatycznego cofania zmian. Reguły `firewall` pozwalają na ruch, ale nie
-stanowią pełnej polityki izolacji sandboxów.
+After an error, **stop and proceed to cleanup** instead of calling further
+`ADD` operations. `result.json` keeps the last successful result. This is a
+manual example with no automatic rollback. The `firewall` rules allow traffic
+but do not constitute a complete sandbox isolation policy.
 
-## 3. Uruchom proces Firecrackera w namespace
+## 3. Launch the Firecracker process in the namespace
 
-W **terminalu B**, również z katalogu repozytorium:
+In **terminal B**, also from the repository directory:
 
 ```bash
 sudo ip netns exec vm-001 ./firecracker --api-sock /tmp/firecracker-vm-001.socket
 ```
 
-Zostaw ten terminal otwarty. TAP istnieje wewnątrz `vm-001`, więc Firecracker
-musi działać w tej samej przestrzeni sieciowej. Nie usuwaj socketu działającej VM;
-jeżeli został po poprzedniej, najpierw upewnij się, że tamten proces się zakończył.
+Leave this terminal open. The TAP device exists inside `vm-001`, so Firecracker
+must run in the same network namespace. Do not remove a running VM's socket;
+if a socket remains from an earlier VM, first make sure that its process has exited.
 
-## 4. Przekaż wynik do Firecrackera i guesta
+## 4. Pass the result to Firecracker and the guest
 
-Wróć do **terminala A**. Najpierw skonfiguruj CPU, pamięć, kernel i dysk:
+Return to **terminal A**. First configure the CPU, memory, kernel, and disk:
 
 ```bash
 ./init-firecracker "$FC_SOCKET"
 ```
 
-W wyniku adaptera są dwa wpisy związane z TAP: hostowy ma `sandbox` równy ścieżce
-namespace, a opis interfejsu guesta ma `sandbox: "vm-001"`. Wybieramy ten drugi:
-jego `name` wskazuje TAP, a `mac` jest adresem, który ma otrzymać **guest**.
+The adapter result contains two entries associated with the TAP: the host entry
+has its `sandbox` set to the namespace path, while the guest interface description
+has `sandbox: "vm-001"`. We select the latter: its `name` identifies the TAP,
+and its `mac` is the address to assign to the **guest**.
 
 ```bash
 jq -e --arg vm "$CNI_CONTAINERID" '
@@ -129,8 +133,8 @@ jq -e --arg vm "$CNI_CONTAINERID" '
 jq . "$STATE_DIR/vm.json"
 ```
 
-Firecracker nie przyjmuje konfiguracji CNI bezpośrednio. Do jego API przekazujemy
-**nazwę istniejącego TAP i MAC guesta**:
+Firecracker does not accept CNI configuration directly. We pass the
+**existing TAP name and the guest MAC address** to its API:
 
 ```bash
 jq '{iface_id: "eth0", host_dev_name: .tap, guest_mac: .mac}' \
@@ -143,9 +147,10 @@ curl --fail-with-body --silent --show-error --unix-socket "$FC_SOCKET" \
   --data-binary @"$STATE_DIR/firecracker-network.json"
 ```
 
-**IP i brama należą do konfiguracji Linuksa w VM**, nie do tego endpointu API.
-Przekażemy je przez parametr kernela `ip=`. Maska poniżej odpowiada `/24`
-z naszego pliku CNI; po zmianie podsieci trzeba dopasować również maskę.
+**The IP address and gateway belong to the Linux configuration inside the VM**,
+not to this API endpoint. We pass them through the `ip=` kernel parameter.
+The netmask below corresponds to `/24` in our CNI file; if you change the subnet,
+you must also adjust the netmask.
 
 ```bash
 GUEST_CIDR="$(jq -er '.address' "$STATE_DIR/vm.json")"
@@ -164,14 +169,15 @@ curl --fail-with-body --silent --show-error --unix-socket "$FC_SOCKET" \
 ./start-firecracker.sh "$FC_SOCKET"
 ```
 
-Drugie `PUT /boot-source` uzupełnia konfigurację z `init-firecracker`, jeszcze
-przed startem VM. Kernel musi obsługiwać `CONFIG_IP_PNP`; jeśli po bootowaniu
-`eth0` nie ma adresu, ustaw w konsoli guesta `ip addr add <address> dev eth0`
-i `ip route replace default via <gateway>`, używając wartości z `vm.json`.
+The second `PUT /boot-source` updates the configuration from `init-firecracker`
+before the VM starts. The kernel must support `CONFIG_IP_PNP`. If `eth0` has no
+address after boot, run `ip addr add <address> dev eth0` and
+`ip route replace default via <gateway>` in the guest console, using the values
+from `vm.json`.
 
-## 5. Sprawdź połączenie i posprzątaj
+## 5. Check connectivity and clean up
 
-W konsoli **guesta** w terminalu B, jako root:
+In the **guest** console in terminal B, as root:
 
 ```bash
 ip link set eth0 up mtu 1400
@@ -183,12 +189,12 @@ ping -c 3 1.1.1.1
 getent hosts example.com
 ```
 
-MTU i DNS ustawiamy jawnie zgodnie z `network.conflist`; sam JSON CNI nie zmienia
-pliku `/etc/resolv.conf` guesta. Te ustawienia są przykładowe i nietrwałe.
-Z hosta w terminalu A możesz też wykonać `ping -c 3 "$GUEST_IP"`.
+We explicitly set MTU and DNS to match `network.conflist`; the CNI JSON alone
+does not update the guest's `/etc/resolv.conf`. These example settings are not
+persistent. You can also run `ping -c 3 "$GUEST_IP"` from the host in terminal A.
 
-Na koniec wykonaj `poweroff` **w gueście** i poczekaj, aż proces Firecrackera
-w terminalu B się zakończy. W terminalu A usuń sieć w odwrotnej kolejności:
+Finally, run `poweroff` **inside the guest** and wait for the Firecracker process
+in terminal B to exit. In terminal A, remove the network in reverse order:
 
 ```bash
 export CNI_COMMAND=DEL
@@ -202,9 +208,9 @@ for index in 2 1 0; do
 done
 ```
 
-Każde `DEL` dostaje ostatni zapisany wynik i tę samą tożsamość przydziału.
-`ptp` wywołuje też `host-local DEL`, zwalniając adres. Sprawdź błędy wszystkich
-trzech wywołań; w razie błędu zachowaj `STATE_DIR` i ponów sprzątanie. Po sukcesie:
+Each `DEL` receives the last saved result and the same allocation identity.
+`ptp` also calls `host-local DEL` to release the address. Check all three calls
+for errors; if any fail, keep `STATE_DIR` and retry cleanup. After success:
 
 ```bash
 ip netns del vm-001
@@ -212,12 +218,13 @@ rm -f -- "$FC_SOCKET"
 rm -rf -- "$STATE_DIR"
 ```
 
-Przy częściowym błędzie `ADD` wykonaj te same `DEL`. Usunięcie namespace sprząta
-też ewentualny TAP, którego plugin nie zdążył dopisać do wyniku. Nie usuwaj całego
-`/var/lib/cni`: zawiera rezerwacje innych przydziałów. `ptp` pozostawia globalny
-mechanizm przekazywania pakietów włączony; mogą korzystać z niego inne sieci.
+After a partial `ADD` failure, run the same `DEL` calls. Deleting the namespace
+also removes any TAP that the plugin did not manage to include in its result.
+Do not delete the entire `/var/lib/cni` directory: it contains reservations for
+other allocations. `ptp` leaves global packet forwarding enabled because other
+networks may be using it.
 
-Źródła: [kontrakt CNI](https://www.cni.dev/docs/spec/),
+Sources: [CNI contract](https://www.cni.dev/docs/spec/),
 [ptp](https://www.cni.dev/plugins/current/main/ptp/),
-[adapter TAP](https://github.com/awslabs/tc-redirect-tap),
-[Firecracker: sieć](https://github.com/firecracker-microvm/firecracker/blob/main/docs/network-setup.md).
+[TAP adapter](https://github.com/awslabs/tc-redirect-tap),
+[Firecracker networking](https://github.com/firecracker-microvm/firecracker/blob/main/docs/network-setup.md).
